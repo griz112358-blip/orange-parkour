@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>橙子跑酷</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Courier New', monospace;
+    }
+    #game {
+      border: 4px solid #eee;
+      image-rendering: pixelated;
+      z-index: 1;
+    }
+    #level-select {
+      z-index: 100;
+    }
+    #ui {
+      position: absolute;
+      top: 20px;
+      color: #fff;
+      text-align: center;
+    }
+    #level-info { font-size: 24px; margin-bottom: 10px; }
+    #message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #ffd700;
+      font-size: 32px;
+      text-shadow: 2px 2px #000;
+      display: none;
+    }
+    #level-select button {
+      background: #ff6b6b;
+      color: #fff;
+      border: 2px solid #ffd700;
+      padding: 10px 20px;
+      margin: 0 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-family: 'Courier New', monospace;
+    }
+    #level-select button:hover {
+      background: #ffd700;
+      color: #000;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div id="level-info">第 <span id="level-num">1</span> 关</div>
+  </div>
+  <canvas id="game" width="800" height="500"></canvas>
+  <div id="message">过关! 🎉</div>
+  <div id="level-select" style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); z-index:100%;">
+    <button onclick="loadLevel(1)">关卡1</button>
+    <button onclick="loadLevel(2)">关卡2</button>
+    <button onclick="loadLevel(3)">关卡3</button>
+    <button onclick="loadLevel(4)">关卡4</button>
+    <button onclick="loadLevel(5)">关卡5</button>
+    <button onclick="loadLevel(6)">关卡6</button>
+    <button onclick="loadLevel(7)">关卡7</button>
+    <button onclick="loadLevel(8)">关卡8</button>
+    <button onclick="loadLevel(9)">关卡9</button>
+  </div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const msgEl = document.getElementById('message');
+const levelNumEl = document.getElementById('level-num');
+
+// 游戏状态
+let currentLevel = 1;
+let gameState = 'playing'; // playing, won
+let mouseX = 0, mouseY = 0;
+let wasAtDoor = false; // 上一帧是否站在门前，用于敲门次数重置
+let doorHint = null;    // 门前提示（敲门进度）
+let doorWarning = null; // 门前警告（例如冰没融化）
+let cameraY = 0;        // 摄像机纵向偏移（用于有上下滚动的关卡）
+
+// 物理参数
+const GRAVITY = 0.6;
+const JUMP_FORCE = -12;
+const SPEED = 5;
+
+// 输入
+const keys = {};
+
+// 玩家
+const player = {
+  x: 50,
+  y: 0,
+  w: 30,
+  h: 40,
+  vx: 0,
+  vy: 0,
+  onGround: false,
+  hasKey: false,
+  knockCount: 0,
+  lastKnockTime: 0,
+  spacePressed: false,
+  color: '#ff6b6b'
+};
+
+// 平台/地面
+const groundY = 420;
+
+// 关卡数据
+const MAX_LEVEL = 9;
+const levels = {
+  1: {
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 } // 地面
+    ],
+    door: { x: 700, y: groundY - 60, w: 40, h: 60 },
+    box: null,
+    key: null,
+    lockedDoor: null,
+    playerStart: { x: 50, y: groundY - 40 }
+  },
+  2: {
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 }, // 地面
+      { x: 500, y: 260, w: 200, h: 20 } // 二楼平台（需要借助箱子）
+    ],
+    door: { x: 620, y: 260 - 60, w: 40, h: 60 },
+    box: { x: 200, y: groundY - 50, w: 50, h: 50 },
+    key: null,
+    lockedDoor: null,
+    playerStart: { x: 50, y: groundY - 40 }
+  },
+  3: {
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 }
+    ],
+    door: null,
+    box: null,
+    key: { x: 350, y: groundY - 30, w: 25, h: 25 },
+    lockedDoor: { x: 650, y: groundY - 60, w: 40, h: 60, locked: true },
+    playerStart: { x: 50, y: groundY - 40 }
+  },
+  4: {
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 }
+    ],
+    door: { x: 700, y: groundY - 60, w: 40, h: 60, knockRequired: 3 },
+    box: null,
+    key: null,
+    lockedDoor: null,
+    playerStart: { x: 50, y: groundY - 40 }
+  },
+  5: {
+    type: 'find',
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 }
+    ],
+    hidden: [
+      { x: 150, y: groundY - 30, w: 40, h: 30, found: false, name: '草丛里的朋友' },
+      { x: 320, y: 80, w: 120, h: 60, found: false, name: '提示牌上的朋友' }
+    ],
+    found: 0,
+    total: 2,
+    playerStart: { x: 50, y: groundY - 40 }
+  },
+  6: {
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 }, // 地面
+      { x: 500, y: 180, w: 200, h: 20 } // 高台（需要堆箱子）
+    ],
+    door: { x: 620, y: 180 - 60, w: 40, h: 60 },
+    boxes: [
+      { x: 100, y: groundY - 50, w: 50, h: 50, dragging: false },
+      { x: 180, y: groundY - 50, w: 50, h: 50, dragging: false },
+      { x: 260, y: groundY - 50, w: 50, h: 50, dragging: false }
+    ],
+    key: null,
+    lockedDoor: null,
+    playerStart: { x: 50, y: groundY - 40 }
+  },
+  7: {
+    type: 'ice',
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 }, // 连续地面
+      { x: 0, y: 200, w: 250, h: 20 } // 左侧二楼平台
+    ],
+    door: { x: 380, y: groundY - 60, w: 40, h: 60, knockRequired: 3 },
+    ice: { x: 150, y: groundY - 15, w: 500, h: 15, melted: false }, // 连续冰块（横跨门左右）
+    fire: { x: 50, y: 150, w: 40, h: 40, dragging: false }, // 火焰（在二楼平台）
+    playerStart: { x: 50, y: groundY - 40 },
+    iceMelted: false
+  },
+  8: {
+    type: 'spa',
+    platforms: [
+      { x: 0, y: groundY, w: 800, h: 80 } // 只保留地面
+    ],
+    // 左侧温泉池（里面有两个人）
+    spaPool: { x: 40, y: groundY - 40, w: 140, h: 40 },
+    npcs: [
+      { x: 60, y: groundY - 70, w: 20, h: 30 },
+      { x: 110, y: groundY - 72, w: 20, h: 32 }
+    ],
+    // 中间温泉陷阱（碰到就死亡）
+    trapPool: { x: 360, y: groundY - 40, w: 120, h: 40 },
+    door: { x: 700, y: groundY - 60, w: 40, h: 60, keyRequired: true },
+    box: null,
+    key: null,
+    // 两个必须跳过去的高障碍物（不能穿过）
+    obstacles: [
+      { x: 260, y: groundY - 80, w: 60, h: 80 }, // 左侧高墙
+      { x: 520, y: groundY - 80, w: 60, h: 80 }  // 右侧高墙
+    ],
+    lockedDoor: null,
+    // 头上的两件衣服
+    clothes: [],
+    clothesChosen: false,
+    chosenCloth: null, // 'normal' | 'lucky'
+    npcGone: false,
+    spaKeyGiven: false,
+    messageTimer: 0,      // 温泉台词计时
+    keyHintTimer: 0,      // "获得钥匙"提示计时
+    playerStart: { x: 220, y: groundY - 40 }
+  },
+  9: {
+    type: 'drop',
+    // 上方悬空的平台（没有真正地面）
+    platforms: [
+      { x: 80, y: 220, w: 80, h: 20 },
+      { x: 220, y: 220, w: 80, h: 20 },
+      { x: 360, y: 220, w: 80, h: 20 },
+      { x: 500, y: 220, w: 80, h: 20 },
+      { x: 640, y: 220, w: 160, h: 20 }  // 最后一个平台延伸到右边缘，防止从右侧掉落
+    ],
+    // 顶上的假门（最后一段平台上，右侧被平台挡住）
+    fakeDoor: { x: 660, y: 220 - 60, w: 40, h: 60 },
+    // 真实地面和真门（在画面下面，看不到，等掉下去画面再跟着向下移动）
+    realGroundY: groundY + 260,
+    realPlatforms: [
+      { x: 0, y: groundY + 260, w: 800, h: 80 }
+    ],
+    door: { x: 700, y: groundY + 260 - 60, w: 40, h: 60 },
+    box: null,
+    key: null,
+    lockedDoor: null,
+    hasDropped: false,
+    dropTargetOffset: 260, // 相机最终要向下移动的距离
+    playerStart: { x: 100, y: 220 - 40 } // 站在第一块小平台上
+  }
+};
+
+let level = levels[1];
+
+function loadLevel(n) {
+  currentLevel = n;
+  level = levels[n];
+  cameraY = 0;
+  player.x = level.playerStart.x;
+  player.y = level.playerStart.y;
+  player.vx = 0;
+  player.vy = 0;
+  player.hasKey = false;
+  player.knockCount = 0;
+  player.lastKnockTime = 0;
+  player.spacePressed = false;
+  levelNumEl.textContent = n;
+  msgEl.style.display = 'none';
+  gameState = 'playing';
+
+  // 第八关：每次进入关卡都初始化衣服和相关状态
+  if (level.type === 'spa' && currentLevel === 8) {
+    resetSpaLevelState();
+  }
+}
+
+// 绘制函数
+function drawRect(x, y, w, h, color) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, w, h);
+}
+
+function drawPlayer() {
+  // 身体
+  drawRect(player.x, player.y, player.w, player.h, player.color);
+  // 眼睛
+  drawRect(player.x + 18, player.y + 8, 6, 6, '#fff');
+  drawRect(player.x + 18, player.y + 8, 2, 2, '#000');
+}
+
+function drawDoor(door) {
+  if (!door) return;
+  // 门框
+  drawRect(door.x, door.y, door.w, door.h, '#4a4a4a');
+  // 门内
+  drawRect(door.x + 4, door.y + 4, door.w - 8, door.h - 4, door.locked ? '#8b4513' : '#2d2d2d');
+  // 门把手
+  if (!door.locked) {
+    drawRect(door.x + door.w - 10, door.y + 30, 6, 6, '#ffd700');
+  }
+}
+
+function drawBox(box) {
+  if (!box) return;
+  // 箱子
+  drawRect(box.x, box.y, box.w, box.h, '#8b6914');
+  // 箱子纹理
+  drawRect(box.x + 5, box.y + 5, box.w - 10, 2, '#6b4f0f');
+  drawRect(box.x + 5, box.y + box.h - 7, box.w - 10, 2, '#6b4f0f');
+  drawRect(box.x + 5, box.y + 15, 2, box.h - 25, '#6b4f0f');
+  drawRect(box.x + box.w - 7, box.y + 15, 2, box.h - 25, '#6b4f0f');
+}
+
+function drawKey(key) {
+  if (!key) return;
+  // 钥匙
+  drawRect(key.x + 8, key.y + 2, 10, 10, '#ffd700');
+  drawRect(key.x + 5, key.y + 12, 4, 10, '#ffd700');
+  drawRect(key.x + 2, key.y + 18, 3, 4, '#ffd700');
+}
+
+function drawPlatform(p) {
+  drawRect(p.x, p.y, p.w, p.h, '#3d5a3d');
+  // 草皮
+  drawRect(p.x, p.y, p.w, 8, '#5a8f5a');
+}
+
+function draw() {
+  // 背景
+  drawRect(0, 0, canvas.width, canvas.height, '#1a1a2e');
+
+  // 世界坐标系跟随相机Y（第九关会用到下落镜头）
+  ctx.save();
+  ctx.translate(0, -cameraY);
+
+  // 平台
+  level.platforms.forEach(drawPlatform);
+
+  // 第五关 - 找隐藏人物
+  if (level.type === 'find') {
+    // 提示牌
+    drawRect(300, 50, 160, 80, '#8b4513');
+    ctx.fillStyle = '#fff';
+    ctx.font = '18px Courier New';
+    ctx.fillText('你要找出所有被', 310, 80);
+    ctx.fillText('隐藏的人物，而不是进门', 280, 105);
+
+    // 草丛
+    drawRect(130, groundY - 20, 80, 20, '#228b22');
+
+    // 隐藏人物（找到后显示）
+    level.hidden.forEach(h => {
+      if (h.found) {
+        // 找到后显示人物
+        drawRect(h.x + 10, h.y, 20, 35, '#ff69b4');
+        drawRect(h.x + 14, h.y + 4, 4, 4, '#000');
+      }
+    });
+
+    // 进度
+    ctx.fillStyle = '#ffd700';
+    ctx.font = '20px Courier New';
+    ctx.fillText(`找到: ${level.found}/${level.total}`, 20, 40);
+  }
+
+  // 第八关 - 温泉与衣服选择
+  if (level.type === 'spa') {
+    const spaLevel = levels[8];
+    // 两个高障碍物（必须跳过）
+    if (spaLevel.obstacles) {
+      spaLevel.obstacles.forEach(o => {
+        drawRect(o.x, o.y, o.w, o.h, '#654321');
+      });
+    }
+    // 左侧温泉池
+    if (spaLevel.spaPool) {
+      drawRect(spaLevel.spaPool.x, spaLevel.spaPool.y, spaLevel.spaPool.w, spaLevel.spaPool.h, '#5a3c1a'); // 池壁
+      drawRect(spaLevel.spaPool.x + 4, spaLevel.spaPool.y + 4, spaLevel.spaPool.w - 8, spaLevel.spaPool.h - 8, '#3fa9f5'); // 水面
+      // 温泉里的人物（两个人）
+      if (!spaLevel.npcGone && spaLevel.npcs) {
+        spaLevel.npcs.forEach(n => {
+          drawRect(n.x, n.y, n.w, n.h, '#ffb6c1');
+          drawRect(n.x + 6, n.y + 4, 4, 4, '#000');
+        });
+      }
+    }
+    // 中间陷阱温泉池（碰到就死亡）
+    if (spaLevel.trapPool) {
+      drawRect(spaLevel.trapPool.x, spaLevel.trapPool.y, spaLevel.trapPool.w, spaLevel.trapPool.h, '#5a3c1a');
+      drawRect(spaLevel.trapPool.x + 4, spaLevel.trapPool.y + 4, spaLevel.trapPool.w - 8, spaLevel.trapPool.h - 8, '#8b0000');
+    }
+    // 头顶两件衣服（未选择前可见）
+    if (spaLevel.clothes && !spaLevel.clothesChosen) {
+      spaLevel.clothes.forEach(c => {
+        drawRect(c.x, c.y, c.w, c.h, c.type === 'lucky' ? '#ff3030' : '#cccccc');
+        // 简单的"福"或"普"标记
+        ctx.fillStyle = '#000';
+        ctx.font = '14px Courier New';
+        ctx.fillText(c.type === 'lucky' ? '福' : '普', c.x + 6, c.y + 18);
+      });
+    }
+    // 温泉对话提示
+    if (spaLevel.messageTimer && spaLevel.messageTimer > 0) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '18px Courier New';
+      ctx.fillText('哪里掉红包了？', spaLevel.spaPool.x, spaLevel.spaPool.y - 10);
+    }
+    // 钥匙获得视觉效果 & 提示
+    if (spaLevel.spaKeyGiven) {
+      // 闪烁的钥匙图标（画在界面左上角）
+      const t = Date.now() / 200;
+      const pulse = 1 + 0.2 * Math.sin(t);
+      const keyX = 20;
+      const keyY = 60;
+      const keyW = 25 * pulse;
+      const keyH = 25 * pulse;
+      drawRect(keyX + 8, keyY + 2, 10 * pulse, 10 * pulse, '#ffd700');
+      drawRect(keyX + 5, keyY + 12, 4 * pulse, 10 * pulse, '#ffd700');
+      drawRect(keyX + 2, keyY + 18, 3 * pulse, 4 * pulse, '#ffd700');
+    }
+    if (spaLevel.keyHintTimer && spaLevel.keyHintTimer > 0) {
+      ctx.fillStyle = '#ffd700';
+      ctx.font = '18px Courier New';
+      ctx.fillText('钥匙到手！去右边开门吧', 120, 70 - cameraY);
+    }
+  }
+
+  // 第九关 - 悬空平台与假门 / 真地面
+  if (level.type === 'drop') {
+    // 顶上的假门
+    if (level.fakeDoor) {
+      drawDoor(level.fakeDoor);
+    }
+    // 底部真正的地面
+    if (level.realPlatforms) {
+      level.realPlatforms.forEach(drawPlatform);
+    }
+  }
+
+  // 箱子
+  drawBox(level.box);
+
+  // 可拖拽箱子
+  if (level.boxes) {
+    level.boxes.forEach(box => drawBox(box));
+  }
+
+  // 钥匙
+  drawKey(level.key);
+
+  // 第七关 - 冰面和火焰
+  if (level.type === 'ice') {
+    // 冰块
+    if (level.ice && !level.ice.melted) {
+      drawRect(level.ice.x, level.ice.y, level.ice.w, level.ice.h, '#87ceeb');
+      // 冰面光泽
+      drawRect(level.ice.x + 5, level.ice.y + 3, 30, 4, '#fff');
+      drawRect(level.ice.x + 100, level.ice.y + 8, 20, 3, '#fff');
+      drawRect(level.ice.x + 200, level.ice.y + 5, 25, 3, '#fff');
+    }
+    // 火焰
+    if (level.fire) {
+      // 火焰底座（可见的底座）
+      drawRect(level.fire.x, level.fire.y + 35, 40, 10, '#8b4513');
+      // 火焰主体（闪烁效果）
+      const flicker = Math.random() * 4;
+      drawRect(level.fire.x + 5, level.fire.y + 10 + flicker, 30, 30 - flicker, '#ff4500');
+      drawRect(level.fire.x + 10, level.fire.y + 5 + flicker, 20, 20 - flicker, '#ff6600');
+      drawRect(level.fire.x + 15, level.fire.y + flicker, 10, 10, '#ffcc00');
+    }
+    // 提示
+    if (!level.iceMelted) {
+      ctx.fillStyle = '#fff';
+      ctx.font = '16px Courier New';
+      ctx.fillText('用鼠标拖动火焰到冰面上融化冰块', 200, 50);
+    }
+  }
+
+  // 门
+  drawDoor(level.door);
+  drawDoor(level.lockedDoor);
+
+  // 门相关提示（敲门进度 / 冰未融化警告）
+  if (doorHint) {
+    ctx.fillStyle = '#ffd700';
+    ctx.font = '18px Courier New';
+    ctx.fillText(doorHint.text, doorHint.x, doorHint.y);
+  }
+  if (doorWarning) {
+    ctx.fillStyle = '#ff6b6b';
+    ctx.font = '16px Courier New';
+    ctx.fillText(doorWarning.text, doorWarning.x, doorWarning.y);
+  }
+  
+  // 玩家
+  drawPlayer();
+
+  // 提示
+  if (player.hasKey && level.lockedDoor?.locked) {
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px Courier New';
+    ctx.fillText('钥匙已获得! 去找锁着的门', 50, 50);
+  }
+
+  ctx.restore(); // 恢复相机变换
+  
+  // 通关时，在画面中央绘制明显提示（相机恢复后绘制，避免坐标偏移）
+  if (gameState === 'won') {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#ffd700';
+    ctx.font = '36px Courier New';
+    ctx.textAlign = 'center';
+    ctx.fillText('已过关! 🎉', canvas.width / 2, canvas.height / 2);
+    ctx.textAlign = 'left';
+  }
+}
+
+function update() {
+  if (gameState !== 'playing') return;
+  // 每帧先清空门提示，由门逻辑重新设置
+  doorHint = null;
+  doorWarning = null;
+
+  // 检测是否在冰面上
+  let onIce = false;
+  if (level.type === 'ice') {
+    const playerBottom = player.y + player.h;
+    const playerCenterX = player.x + player.w / 2;
+
+    // 检查是否在冰块上且冰未融化
+    if (level.ice && !level.ice.melted &&
+        playerCenterX >= level.ice.x && playerCenterX <= level.ice.x + level.ice.w &&
+        playerBottom >= level.ice.y - 5 && playerBottom <= level.ice.y + level.ice.h + 5) {
+      onIce = true;
+    }
+  }
+
+  // 左右移动
+  if (keys['ArrowLeft'] || keys['a']) {
+    player.vx = onIce ? -SPEED * 1.5 : -SPEED;
+  } else if (keys['ArrowRight'] || keys['d']) {
+    player.vx = onIce ? SPEED * 1.5 : SPEED;
+  } else if (onIce) {
+    // 在冰面上，不立即停止，保持滑动
+    // 速度逐渐减小
+    if (player.vx > 0) player.vx = Math.max(0, player.vx - 0.1);
+    else if (player.vx < 0) player.vx = Math.min(0, player.vx + 0.1);
+  } else {
+    player.vx = 0;
+  }
+
+  // 跳跃
+  if ((keys['ArrowUp'] || keys['w']) && player.onGround) {
+    player.vy = JUMP_FORCE;
+    player.onGround = false;
+  }
+
+  // 重力
+  player.vy += GRAVITY;
+
+  // 应用速度
+  player.x += player.vx;
+  player.y += player.vy;
+
+  // 箱子物理（下落）
+  if (level.boxes) {
+    level.boxes.forEach(box => {
+      if (!box.dragging) {
+        // 简单的重力下落
+        let boxVy = 5;
+        box.y += boxVy;
+
+        // 箱子落地检测
+        level.platforms.forEach(p => {
+          if (box.x + box.w > p.x && box.x < p.x + p.w &&
+              box.y + box.h > p.y && box.y < p.y + p.h) {
+            box.y = p.y - box.h;
+          }
+        });
+
+        // 箱子之间相互碰撞（堆叠）
+        level.boxes.forEach(other => {
+          if (box !== other && !other.dragging) {
+            if (box.x + box.w > other.x && box.x < other.x + other.w &&
+                box.y + box.h > other.y && box.y < other.y + other.h) {
+              box.y = other.y - box.h;
+            }
+          }
+        });
+
+        // 地面检测
+        if (box.y + box.h > groundY) {
+          box.y = groundY - box.h;
+        }
+      }
+    });
+  }
+
+  // 边界
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.w > canvas.width) player.x = canvas.width - player.w;
+
+  // 平台碰撞
+  player.onGround = false;
+  level.platforms.forEach(p => {
+    if (player.x + player.w > p.x && player.x < p.x + p.w) {
+      // 落下
+      if (player.y + player.h > p.y && player.y + player.h < p.y + 20 && player.vy > 0) {
+        player.y = p.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    }
+  });
+
+  // 第九关：掉下去后启用下方真实地面，并让相机向下移动
+  if (currentLevel === 9 && level.type === 'drop') {
+    // 掉出上方平台区域后，标记已经下落
+    if (!level.hasDropped && player.y > 260) {
+      level.hasDropped = true;
+    }
+    // 相机缓动到目标位置
+    if (level.hasDropped) {
+      const target = level.dropTargetOffset || 260;
+      if (cameraY < target) {
+        cameraY += 4;
+        if (cameraY > target) cameraY = target;
+      }
+      // 与下方真实地面碰撞
+      if (level.realPlatforms) {
+        level.realPlatforms.forEach(p => {
+          if (player.x + player.w > p.x && player.x < p.x + p.w) {
+            if (player.y + player.h > p.y && player.y + player.h < p.y + 20 && player.vy > 0) {
+              player.y = p.y - player.h;
+              player.vy = 0;
+              player.onGround = true;
+            }
+          }
+        });
+      }
+    }
+  }
+
+  // 第八关：高障碍物碰撞（不能穿过，只能跳过）
+  if (currentLevel === 8 && level.type === 'spa' && level.obstacles) {
+    level.obstacles.forEach(o => {
+      // 站在障碍物顶上
+      if (player.x + player.w > o.x && player.x < o.x + o.w) {
+        if (player.y + player.h > o.y && player.y + player.h < o.y + 20 && player.vy > 0) {
+          player.y = o.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      }
+      // 左右侧面碰撞，阻止穿过
+      if (player.y + player.h > o.y + 10 && player.y < o.y + o.h) {
+        // 从左往右撞到障碍物
+        if (player.x + player.w > o.x && player.x < o.x && player.vx > 0) {
+          player.x = o.x - player.w;
+        }
+        // 从右往左撞到障碍物
+        else if (player.x < o.x + o.w && player.x > o.x + o.w - 5 && player.vx < 0) {
+          player.x = o.x + o.w;
+        }
+      }
+    });
+  }
+
+  // 第七关：冰块碰撞（玩家可以站在冰上）
+  if (level.type === 'ice') {
+    if (level.ice && !level.ice.melted) {
+      if (player.x + player.w > level.ice.x && player.x < level.ice.x + level.ice.w) {
+        if (player.y + player.h > level.ice.y && player.y + player.h < level.ice.y + 20 && player.vy > 0) {
+          player.y = level.ice.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      }
+    }
+  }
+
+  // 箱子碰撞 (推箱子 + 站立)
+  if (level.box) {
+    const b = level.box;
+
+    // 检测是否在箱子上
+    if (player.x + player.w > b.x && player.x < b.x + b.w) {
+      // 落下到箱子
+      if (player.y + player.h > b.y && player.y + player.h < b.y + 20 && player.vy > 0) {
+        player.y = b.y - player.h;
+        player.vy = 0;
+        player.onGround = true;
+      }
+      // 侧面碰撞 - 推箱子
+      else if (player.y + player.h > b.y + 10) {
+        // 玩家在箱子左边，往右推
+        if (player.x + player.w > b.x && player.x < b.x + 10 && player.vx > 0) {
+          b.x = player.x + player.w;
+          // 限制箱子不超出边界
+          if (b.x + b.w > canvas.width) b.x = canvas.width - b.w;
+        }
+        // 玩家在箱子右边，往左推
+        else if (player.x < b.x + b.w && player.x > b.x + b.w - 10 && player.vx < 0) {
+          b.x = player.x - b.w;
+          if (b.x < 0) b.x = 0;
+        }
+      }
+    }
+  }
+
+  // 箱子碰撞 (3个可拖拽箱子)
+  if (level.boxes) {
+    level.boxes.forEach(b => {
+      // 玩家站在箱子上
+      if (player.x + player.w > b.x && player.x < b.x + b.w) {
+        if (player.y + player.h > b.y && player.y + player.h < b.y + 20 && player.vy > 0) {
+          player.y = b.y - player.h;
+          player.vy = 0;
+          player.onGround = true;
+        }
+      }
+      // 玩家推箱子
+      if (player.y + player.h > b.y && player.y < b.y + b.h) {
+        // 玩家在箱子左边，往右推
+        if (player.x + player.w > b.x && player.x < b.x + 10 && player.vx > 0) {
+          b.x = player.x + player.w;
+          if (b.x + b.w > canvas.width) b.x = canvas.width - b.w;
+        }
+        // 玩家在箱子右边，往左推
+        else if (player.x < b.x + b.w && player.x > b.x + b.w - 10 && player.vx < 0) {
+          b.x = player.x - b.w;
+          if (b.x < 0) b.x = 0;
+        }
+      }
+    });
+  }
+
+  // 第八关：温泉陷阱判定 & 红包衣服触发事件
+  if (currentLevel === 8 && level.type === 'spa') {
+    const spaLevel = levels[8];
+    // 陷阱温泉：碰到即死亡并重开本关
+    if (spaLevel.trapPool) {
+      const t = spaLevel.trapPool;
+      if (player.x + player.w > t.x && player.x < t.x + t.w &&
+          player.y + player.h > t.y && player.y < t.y + t.h) {
+        restartCurrentLevel();
+        return;
+      }
+    }
+    // 穿上红包衣服后，走到左侧温泉池边缘，触发对话 + 钥匙
+    if (!spaLevel.spaKeyGiven && spaLevel.chosenCloth === 'lucky' && spaLevel.spaPool) {
+      const pCenterX = player.x + player.w / 2;
+      const pBottomY = player.y + player.h;
+      const edgeX = spaLevel.spaPool.x + spaLevel.spaPool.w + 5; // 池子的右侧边缘附近
+      if (pCenterX >= spaLevel.spaPool.x && pCenterX <= edgeX &&
+          pBottomY >= spaLevel.spaPool.y - 5 && pBottomY <= spaLevel.spaPool.y + spaLevel.spaPool.h + 10) {
+        // 温泉里的人离开
+        spaLevel.npcGone = true;
+        // 钥匙从天而降（这里直接算作获得，同时展示视觉效果和提示）
+        player.hasKey = true;
+        spaLevel.spaKeyGiven = true;
+        spaLevel.messageTimer = 180; // 对话持续一段时间
+        spaLevel.keyHintTimer = 240; // "获得钥匙"提示持续时间稍长
+      }
+    }
+    // 对话计时衰减
+    if (spaLevel.messageTimer && spaLevel.messageTimer > 0) {
+      spaLevel.messageTimer--;
+    }
+    if (spaLevel.keyHintTimer && spaLevel.keyHintTimer > 0) {
+      spaLevel.keyHintTimer--;
+    }
+  }
+
+  // 碰到钥匙
+  if (level.key) {
+    const k = level.key;
+    if (player.x + player.w > k.x && player.x < k.x + k.w &&
+        player.y + player.h > k.y && player.y < k.y + k.h) {
+      player.hasKey = true;
+      level.key = null;
+    }
+  }
+
+  // 碰到门（普通门）
+  if (level.door) {
+    const d = level.door;
+    // 第九关：只有掉落完成后门才能通过
+    const canEnterDoor = !(currentLevel === 9 && level.type === 'drop' && !level.hasDropped);
+    
+    // 门前判定区域：水平和垂直方向都要在门范围内
+    const atDoorX = player.x + player.w > d.x - 10 && player.x < d.x + d.w + 10;
+    const atDoorY = player.y + player.h > d.y && player.y < d.y + d.h;
+    const atDoor = atDoorX && atDoorY;
+    
+    // 离开门口时重置敲门次数，避免上一次残留导致"一按就过关"
+    if (!atDoor && wasAtDoor) {
+      player.knockCount = 0;
+      player.lastKnockTime = 0;
+      player.spacePressed = false;
+    }
+    wasAtDoor = atDoor;
+
+    if (canEnterDoor && atDoor) {
+      // 需要敲门的门
+      if (d.knockRequired) {
+        const now = Date.now();
+
+        // 设置敲门提示（在 draw 中统一绘制）
+        doorHint = {
+          text: `按空格敲门: ${player.knockCount}/${d.knockRequired}`,
+          x: d.x - 50,
+          y: d.y - 15
+        };
+
+        // 敲门逻辑
+        if (keys[' '] && !player.spacePressed) {
+          player.knockCount++;
+          player.lastKnockTime = now;
+          player.spacePressed = true;
+        }
+        if (!keys[' ']) {
+          player.spacePressed = false;
+        }
+
+        // 第七关：冰未融化时不能敲门
+        if (level.type === 'ice' && !level.iceMelted) {
+          doorWarning = {
+            text: '冰还没融化，无法停下!',
+            x: d.x - 60,
+            y: d.y - 40
+          };
+        } else if (player.knockCount >= d.knockRequired) {
+          nextLevel();
+        }
+      } else if (d.keyRequired && currentLevel === 8) {
+        // 第八关：需要先拿到钥匙才能进门
+        if (player.hasKey) {
+          nextLevel();
+        } else {
+          doorWarning = {
+            text: '好像还少了什么……（先去拿钥匙）',
+            x: d.x - 80,
+            y: d.y - 40
+          };
+        }
+      } else {
+        // 普通门直接过关
+        nextLevel();
+      }
+    }
+  }
+
+  // 碰到锁着的门
+  if (level.lockedDoor && level.lockedDoor.locked) {
+    const d = level.lockedDoor;
+    if (player.x + player.w > d.x && player.x < d.x + d.w &&
+        player.y + player.h > d.y) {
+      if (player.hasKey) {
+        level.lockedDoor.locked = false;
+        player.hasKey = false;
+      }
+    }
+  }
+
+  // 锁着的门解锁后检测过关
+  if (level.lockedDoor && !level.lockedDoor.locked) {
+    const d = level.lockedDoor;
+    if (player.x + player.w > d.x && player.x < d.x + d.w &&
+        player.y + player.h > d.y) {
+      nextLevel();
+    }
+  }
+}
+
+function nextLevel() {
+  gameState = 'won';
+  msgEl.style.display = 'block';
+
+  setTimeout(() => {
+    if (currentLevel < MAX_LEVEL) {
+      currentLevel++;
+      loadLevel(currentLevel);
+    } else {
+      msgEl.textContent = '🎉 全部通关! 🎉';
+      document.getElementById('level-select').style.display = 'block';
+    }
+  }, 1500);
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// 输入监听
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  // 阻止方向键和空格触发页面滚动或按钮点击（例如关卡按钮被空格重复触发）
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) {
+    e.preventDefault();
+  }
+});
+
+document.addEventListener('keyup', e => {
+  keys[e.key] = false;
+});
+
+// 点击检测 - 找隐藏人物 / 第八关选衣服
+canvas.addEventListener('click', e => {
+  // 第五关：点击找隐藏人物
+  if (currentLevel === 5 && level.type === 'find') {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clickX = (e.clientX - rect.left) * scaleX;
+    const clickY = (e.clientY - rect.top) * scaleY;
+
+    level.hidden.forEach(h => {
+      if (!h.found &&
+          clickX >= h.x && clickX <= h.x + h.w &&
+          clickY >= h.y && clickY <= h.y + h.h) {
+        h.found = true;
+        level.found++;
+
+        // 找到时显示
+        ctx.fillStyle = '#00ff00';
+        ctx.font = '24px Courier New';
+        ctx.fillText(`找到! ${h.name}`, h.x, h.y - 10);
+
+        if (level.found >= level.total) {
+          setTimeout(() => {
+            gameState = 'won';
+            msgEl.textContent = '🎉 全部找到! 🎉';
+            msgEl.style.display = 'block';
+
+            setTimeout(() => {
+              currentLevel = 6;
+              loadLevel(6);
+            }, 2000);
+          }, 500);
+        }
+      }
+    });
+  }
+
+  // 第八关：点击选择衣服
+  if (currentLevel === 8 && level.type === 'spa') {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clickX = (e.clientX - rect.left) * scaleX;
+    const clickY = (e.clientY - rect.top) * scaleY;
+
+    const spaLevel = levels[8];
+    if (!spaLevel.clothesChosen && spaLevel.clothes) {
+      spaLevel.clothes.forEach(c => {
+        if (clickX >= c.x && clickX <= c.x + c.w &&
+            clickY >= c.y && clickY <= c.y + c.h) {
+          spaLevel.clothesChosen = true;
+          spaLevel.chosenCloth = c.type;
+          // 普通衣服 = 默认颜色，有红包衣服换成更喜庆的颜色
+          player.color = c.type === 'lucky' ? '#ff0000' : '#ff6b6b';
+        }
+      });
+    }
+  }
+});
+
+// 火焰和箱子拖拽功能
+let draggedFire = null;
+let draggedBox = null;
+// 第八关 - 温泉与衣服相关辅助
+function resetSpaLevelState() {
+  const l = levels[8];
+  if (!l) return;
+  // 初始化衣服位置（相对于玩家出生点）
+  const baseX = l.playerStart.x;
+  const baseY = l.playerStart.y - 80;
+  l.clothes = [
+    { x: baseX - 30, y: baseY, w: 30, h: 30, type: 'normal' },
+    { x: baseX + 20, y: baseY, w: 30, h: 30, type: 'lucky' }
+  ];
+  l.clothesChosen = false;
+  l.chosenCloth = null;
+  l.npcGone = false;
+  l.spaKeyGiven = false;
+  l.messageTimer = 0;
+  l.keyHintTimer = 0;
+}
+
+function restartCurrentLevel() {
+  if (currentLevel === 8 && level.type === 'spa') {
+    resetSpaLevelState();
+  }
+  loadLevel(currentLevel);
+}
+
+function getClickPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: (clientX - rect.left) * scaleX,
+    y: (clientY - rect.top) * scaleY
+  };
+}
+
+canvas.onmousedown = function(e) {
+  // 第七关 - 火焰拖拽
+  if (currentLevel === 7 && level.fire) {
+    const pos = getClickPos(e);
+    const fire = level.fire;
+    if (pos.x >= fire.x - 10 && pos.x <= fire.x + fire.w + 10 &&
+        pos.y >= fire.y - 10 && pos.y <= fire.y + fire.h + 10) {
+      draggedFire = fire;
+      fire.dragging = true;
+      canvas.style.cursor = 'grabbing';
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+  }
+
+  // 第六关 - 箱子拖拽
+  if (currentLevel === 6 && level.boxes) {
+    const pos = getClickPos(e);
+
+    level.boxes.forEach(box => {
+      if (pos.x >= box.x && pos.x <= box.x + box.w &&
+          pos.y >= box.y && pos.y <= box.y + box.h) {
+        draggedBox = box;
+        box.dragging = true;
+        e.preventDefault();
+      }
+    });
+  }
+};
+
+canvas.onmousemove = function(e) {
+  const pos = getClickPos(e);
+
+  // 火焰拖拽
+  if (draggedFire) {
+    draggedFire.x = pos.x - draggedFire.w / 2;
+    draggedFire.y = pos.y - draggedFire.h / 2;
+
+    // 检测火焰是否碰到冰块
+    if (level.ice && !level.ice.melted &&
+        draggedFire.x + draggedFire.w > level.ice.x &&
+        draggedFire.x < level.ice.x + level.ice.w &&
+        draggedFire.y + draggedFire.h > level.ice.y) {
+      level.ice.melted = true;
+      level.iceMelted = true;
+      draggedFire.dragging = false;
+      draggedFire = null;
+      canvas.style.cursor = 'default';
+    }
+  }
+
+  // 箱子拖拽
+  if (draggedBox) {
+    draggedBox.x = pos.x - draggedBox.w / 2;
+    draggedBox.y = pos.y - draggedBox.h / 2;
+  }
+};
+
+canvas.onmouseup = function(e) {
+  if (draggedBox) {
+    draggedBox.dragging = false;
+    draggedBox = null;
+  }
+  if (draggedFire) {
+    draggedFire.dragging = false;
+    draggedFire = null;
+    canvas.style.cursor = 'default';
+  }
+};
+
+canvas.onmouseleave = function(e) {
+  if (draggedBox) {
+    draggedBox.dragging = false;
+    draggedBox = null;
+  }
+  if (draggedFire) {
+    draggedFire.dragging = false;
+    draggedFire = null;
+    canvas.style.cursor = 'default';
+  }
+};
+
+// 开始
+loadLevel(1);
+gameLoop();
+</script>
+</body>
+</html>
